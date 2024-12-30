@@ -8,6 +8,7 @@ from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 import secrets
 import os
+from urllib.parse import urlencode
 from dotenv import load_dotenv
 from pymongo import MongoClient
 
@@ -54,44 +55,6 @@ def send_email(subject, message, to_address):
     server.sendmail(from_address, to_address, text)
     server.quit()
 
-
-@app.post("/create_lead")
-async def create_lead(lead: LeadSchema):
-    token = secrets.token_hex(20)
-    existing_lead = leads_collection.find_one({'email': lead.email})
-
-    if existing_lead:
-        if existing_lead.get('verified', False):
-            return {"message": "Email is already verified"}
-
-        leads_collection.update_one(
-            {'_id': existing_lead['_id']},
-            {
-                "$set": {
-                    "name": lead.name,
-                    "phone": lead.phone,
-                    "token": token,
-                    "verified": False
-                }
-            }
-        )
-    else:
-        leads_collection.insert_one({
-            "name": lead.name,
-            "email": lead.email,
-            "phone": lead.phone,
-            "token": token,
-            "verified": False
-        })
-
-    # [Rest of your email generation and sending logic]
-    msg = f'<p>Welcome to SmartBids.ai, {lead.name}!</p><p>Please click on the following link to verify your email:</p><a href="{email_base_url}/verify_client?token={token}&email={quote(lead.email)}&phone={quote(lead.phone)}&db_type=leads">Verify Email</a><p>Thank you,</p><p>SmartBids.ai Team</p>'
-    subject = 'Email verification'
-    send_email(subject, msg, lead.email)
-
-    return {"message": "Verification email sent"}
-
-
 @app.post("/send_verification")
 async def send_verification(email: EmailSchema):
     token = secrets.token_hex(20)
@@ -130,12 +93,21 @@ async def verify_client(token: str, email: str, phone: Optional[str] = None, db_
     collection = users_collection if db_type == "users" else leads_collection
     record = collection.find_one({'email': email, 'token': token})
 
+    query_params = {
+    "access_token": token,
+    "name": record.get('name', ''),
+    "email": email
+    }
+
+    full_url = f"{os.environ['FRONTEND_URL']}?{urlencode(query_params)}"
+    print(full_url)
+
     if record:
         if record.get('verified', False):
             return f"""
             <h1>This email has already been verified!</h1>
             <p>You are fully verified and can now login.</p>
-            <a href="{os.environ['FRONTEND_URL']}">Click here to login</a>
+            <a href="{full_url}">Click here to login</a>
             """
         else:
             collection.update_one(
@@ -145,8 +117,43 @@ async def verify_client(token: str, email: str, phone: Optional[str] = None, db_
             return f"""
             <h1>Your email has been successfully verified!</h1>
             <p>You are fully verified and can now login.</p>
-            <a href="{os.environ['FRONTEND_URL']}">Click here to login</a>
+            <a href="{full_url}">Click here to login</a>
             """
 
     raise HTTPException(status_code=400, detail="Invalid token or email")
 
+@app.post("/create_lead")
+async def create_lead(lead: LeadSchema):
+    token = secrets.token_hex(20)
+    existing_lead = leads_collection.find_one({'email': lead.email})
+
+    if existing_lead:
+        if existing_lead.get('verified', False):
+            return {"message": "Email is already verified"}
+
+        leads_collection.update_one(
+            {'_id': existing_lead['_id']},
+            {
+                "$set": {
+                    "name": lead.name,
+                    "phone": lead.phone,
+                    "token": token,
+                    "verified": False
+                }
+            }
+        )
+    else:
+        leads_collection.insert_one({
+            "name": lead.name,
+            "email": lead.email,
+            "phone": lead.phone,
+            "token": token,
+            "verified": False
+        })
+
+    # [Rest of your email generation and sending logic]
+    msg = f'<p>Welcome to SmartBids.ai, {lead.name}!</p><p>Please click on the following link to verify your email:</p><a href="{email_base_url}/verify_client?token={token}&email={quote(lead.email)}&phone={quote(lead.phone)}&db_type=leads">Verify Email</a><p>Thank you,</p><p>SmartBids.ai Team</p>'
+    subject = 'Email verification'
+    send_email(subject, msg, lead.email)
+
+    return {"message": "Verification email sent"}
